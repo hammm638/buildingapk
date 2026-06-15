@@ -20,6 +20,16 @@ on:
         description: "Hanya jalankan analyze (true/false)"
         required: false
         default: "false"
+      
+      upload_to_release:
+        description: "Upload ke GitHub Release (true/false)"
+        required: false
+        default: "false"
+      
+      upload_to_gdrive:
+        description: "Upload ke Google Drive (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   build:
@@ -126,7 +136,6 @@ jobs:
 
       # ==========================================================
       # 🔍 TAHAP ANALYZE — STEP 1: Jalankan & cetak hasil
-      # (Dipisah dari exit 1 biar log tidak ter-truncate)
       # ==========================================================
       - name: Analyze Project Code
         working-directory: ${{ env.PROJECT_DIR }}
@@ -153,7 +162,6 @@ jobs:
 
       # ==========================================================
       # 🔍 TAHAP ANALYZE — STEP 2: Stop workflow jika only_analyze
-      # (Dipisah biar log step di atas sudah ter-commit ke GitHub)
       # ==========================================================
       - name: Stop if Analyze Only
         if: ${{ github.event.inputs.only_analyze == 'true' }}
@@ -216,10 +224,11 @@ jobs:
             cd -
           fi
 
-      # =========================
-      # CHECK APK
-      # =========================
+      # ==========================================================
+      # 📊 CHECK APK OUTPUT (dengan ID untuk referensi)
+      # ==========================================================
       - name: Check APK Output
+        id: check_apk
         run: |
           echo "=== APK Output Scanning (Global Mode) ==="
 
@@ -237,20 +246,84 @@ jobs:
 
           echo "✅ APK Sukses Ditemukan di Jalur: $APK_PATH"
           
-          echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
           echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "APK_FULL_PATH=$APK_FOUND" >> $GITHUB_OUTPUT
 
           echo ""
           echo "=== APK Size ==="
           ls -lh "$APK_FOUND"
 
-      # =========================
-      # UPLOAD APK
-      # =========================
+      # ==========================================================
+      # 📤 UPLOAD APK (Artifact) - WAJIB, retention 1 hari
+      # ==========================================================
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: flutter-${{ github.event.inputs.build_type }}-${{ github.event.inputs.tag }}
-          path: ${{ env.PROJECT_DIR }}/${{ env.APK_PATH }}
+          path: ${{ env.APK_PATH }}
           retention-days: 1
           if-no-files-found: error
+
+      # ==========================================================
+      # 🚀 UPLOAD KE GITHUB RELEASE (Optional)
+      # ==========================================================
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.upload_to_release == 'true' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+          name: Release ${{ github.event.inputs.tag }}
+          body: |
+            ## Build Information
+            - **Tag:** ${{ github.event.inputs.tag }}
+            - **Type:** ${{ github.event.inputs.build_type }}
+            - **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            - **Flutter Version:** 3.41.9
+            
+            ## Download
+            APK file attached below 👇
+          files: ${{ steps.check_apk.outputs.APK_FULL_PATH }}
+          draft: false
+          prerelease: ${{ github.event.inputs.build_type == 'debug' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==========================================================
+      # 📤 UPLOAD KE GOOGLE DRIVE (Optional)
+      # ==========================================================
+      - name: Upload to Google Drive
+        if: ${{ github.event.inputs.upload_to_gdrive == 'true' }}
+        uses: adityak74/google-drive-upload-git-action@main
+        with:
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
+          filename: ${{ steps.check_apk.outputs.APK_FULL_PATH }}
+          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
+          name: app-${{ github.event.inputs.build_type }}-${{ github.event.inputs.tag }}.apk
+          mime: application/vnd.android.package-archive
+
+      # ==========================================================
+      # 📊 SUMMARY OUTPUT (Fitur Baru dari gabungan)
+      # ==========================================================
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "========================================="
+          echo "📊 BUILD SUMMARY"
+          echo "========================================="
+          echo "✅ Status: ${{ job.status }}"
+          echo "📦 Tag: ${{ github.event.inputs.tag }}"
+          echo "🔧 Type: ${{ github.event.inputs.build_type }}"
+          echo "📁 APK Path: ${{ env.APK_PATH }}"
+          
+          if [ "${{ github.event.inputs.upload_to_release }}" = "true" ]; then
+            echo "🚀 Upload to Release: YES"
+          else
+            echo "📦 Upload to Release: NO"
+          fi
+          
+          if [ "${{ github.event.inputs.upload_to_gdrive }}" = "true" ]; then
+            echo "☁️ Upload to Google Drive: YES"
+          else
+            echo "💾 Upload to Google Drive: NO"
+          fi
+          echo "========================================="
